@@ -12,3 +12,5 @@ export * from './repositoryAnalysis';
 export * from './repositoryItem';
 export * from './repositoryItemType';
 export * from './repositoryLanguage';
+export * from './repositoryTreeEntry';
+export * from './repositoryTreeEntryType';

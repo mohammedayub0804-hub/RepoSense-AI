@@ -12,5 +12,13 @@ export interface RepositoryItem {
   path: string;
   type: RepositoryItemType;
   htmlUrl: string;
+  /** Estimated role based on the item name and path */
   importance: string;
+  /** True only when this item's file contents were fetched from GitHub */
+  contentRetrieved: boolean;
+  /**
+     * Short summary derived from retrieved content, when available
+     * @nullable
+     */
+  contentSummary: string | null;
 }

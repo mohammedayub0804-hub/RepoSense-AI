@@ -7,6 +7,7 @@
  */
 import type { RepositoryItem } from './repositoryItem';
 import type { RepositoryLanguage } from './repositoryLanguage';
+import type { RepositoryTreeEntry } from './repositoryTreeEntry';
 
 export interface RepositoryAnalysis {
   owner: string;
@@ -26,5 +27,12 @@ export interface RepositoryAnalysis {
   primaryLanguage: string | null;
   languages: RepositoryLanguage[];
   importantItems: RepositoryItem[];
+  fileTree: RepositoryTreeEntry[];
+  fileTreeEntryCount: number;
+  fileTreeTruncated: boolean;
+  technologyStack: string[];
+  /** An estimate based on repository metadata and retrieved documentation */
+  likelyPurposeEstimate: string;
+  evidenceSources: string[];
   overview: string;
 }

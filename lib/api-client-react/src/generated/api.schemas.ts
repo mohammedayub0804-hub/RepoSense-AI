@@ -33,7 +33,34 @@ export interface RepositoryItem {
   path: string;
   type: RepositoryItemType;
   htmlUrl: string;
+  /** Estimated role based on the item name and path */
   importance: string;
+  /** True only when this item's file contents were fetched from GitHub */
+  contentRetrieved: boolean;
+  /**
+     * Short summary derived from retrieved content, when available
+     * @nullable
+     */
+  contentSummary: string | null;
+}
+
+export type RepositoryTreeEntryType = typeof RepositoryTreeEntryType[keyof typeof RepositoryTreeEntryType];
+
+
+export const RepositoryTreeEntryType = {
+  file: 'file',
+  directory: 'directory',
+  submodule: 'submodule',
+} as const;
+
+export interface RepositoryTreeEntry {
+  path: string;
+  type: RepositoryTreeEntryType;
+  /** @nullable */
+  size: number | null;
+  depth: number;
+  /** Estimate based on the path and filename, not file contents */
+  estimatedPurpose: string;
 }
 
 export interface RepositoryAnalysis {
@@ -54,6 +81,13 @@ export interface RepositoryAnalysis {
   primaryLanguage: string | null;
   languages: RepositoryLanguage[];
   importantItems: RepositoryItem[];
+  fileTree: RepositoryTreeEntry[];
+  fileTreeEntryCount: number;
+  fileTreeTruncated: boolean;
+  technologyStack: string[];
+  /** An estimate based on repository metadata and retrieved documentation */
+  likelyPurposeEstimate: string;
+  evidenceSources: string[];
   overview: string;
 }
 

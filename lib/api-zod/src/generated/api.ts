@@ -52,8 +52,22 @@ export const AnalyzeRepositoryResponse = zod.object({
   "path": zod.string(),
   "type": zod.enum(['file', 'directory']),
   "htmlUrl": zod.string(),
-  "importance": zod.string()
+  "importance": zod.string().describe('Estimated role based on the item name and path'),
+  "contentRetrieved": zod.boolean().describe('True only when this item\'s file contents were fetched from GitHub'),
+  "contentSummary": zod.string().nullable().describe('Short summary derived from retrieved content, when available')
 })),
+  "fileTree": zod.array(zod.object({
+  "path": zod.string(),
+  "type": zod.enum(['file', 'directory', 'submodule']),
+  "size": zod.number().int().nullable(),
+  "depth": zod.number().int(),
+  "estimatedPurpose": zod.string().describe('Estimate based on the path and filename, not file contents')
+})),
+  "fileTreeEntryCount": zod.number().int(),
+  "fileTreeTruncated": zod.boolean(),
+  "technologyStack": zod.array(zod.string()),
+  "likelyPurposeEstimate": zod.string().describe('An estimate based on repository metadata and retrieved documentation'),
+  "evidenceSources": zod.array(zod.string()),
   "overview": zod.string()
 })
 

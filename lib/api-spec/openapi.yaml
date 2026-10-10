@@ -46,7 +46,7 @@ paths:
             minLength: 1
       responses:
         "200":
-          description: Repository metadata and key root files
+          description: Repository metadata, languages, selected retrieved file contents, and a file-tree preview
           content:
             application/json:
               schema:
@@ -116,7 +116,30 @@ components:
           type: string
         importance:
           type: string
-      required: [name, path, type, htmlUrl, importance]
+          description: Estimated role based on the item name and path
+        contentRetrieved:
+          type: boolean
+          description: True only when this item's file contents were fetched from GitHub
+        contentSummary:
+          type: [string, "null"]
+          description: Short summary derived from retrieved content, when available
+      required: [name, path, type, htmlUrl, importance, contentRetrieved, contentSummary]
+    RepositoryTreeEntry:
+      type: object
+      properties:
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory, submodule]
+        size:
+          type: [integer, "null"]
+        depth:
+          type: integer
+        estimatedPurpose:
+          type: string
+          description: Estimate based on the path and filename, not file contents
+      required: [path, type, size, depth, estimatedPurpose]
     RepositoryAnalysis:
       type: object
       properties:
@@ -152,6 +175,25 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RepositoryItem"
+        fileTree:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryTreeEntry"
+        fileTreeEntryCount:
+          type: integer
+        fileTreeTruncated:
+          type: boolean
+        technologyStack:
+          type: array
+          items:
+            type: string
+        likelyPurposeEstimate:
+          type: string
+          description: An estimate based on repository metadata and retrieved documentation
+        evidenceSources:
+          type: array
+          items:
+            type: string
         overview:
           type: string
       required:
@@ -169,5 +211,11 @@ components:
         - primaryLanguage
         - languages
         - importantItems
+        - fileTree
+        - fileTreeEntryCount
+        - fileTreeTruncated
+        - technologyStack
+        - likelyPurposeEstimate
+        - evidenceSources
         - overview
 
