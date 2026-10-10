@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "RepoSense AI"
+description = "A responsive repository explorer that helps students and developers understand public GitHub projects by showing live repository metadata, key files, languages, and a concise overview."
+version = "1.0.0"
+id = "artifacts/reposense-ai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19139
+
+[services.development]
+run = "pnpm --filter @workspace/reposense-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/reposense-ai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/reposense-ai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19139"
+BASE_PATH = "/"

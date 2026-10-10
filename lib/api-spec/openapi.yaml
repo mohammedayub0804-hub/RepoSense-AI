@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: repositories
+    description: Public GitHub repository analysis
 paths:
   /healthz:
     get:
@@ -24,6 +26,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /repositories/{owner}/{repo}:
+    get:
+      operationId: analyzeRepository
+      tags: [repositories]
+      summary: Analyze a public GitHub repository
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Repository metadata and key root files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryAnalysis"
+        "400":
+          description: Invalid repository identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Repository not found or not public
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: GitHub API rate limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: GitHub could not be reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +84,90 @@ components:
           type: string
       required:
         - status
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+      required: [error, code]
+    RepositoryLanguage:
+      type: object
+      properties:
+        name:
+          type: string
+        bytes:
+          type: integer
+        percentage:
+          type: number
+      required: [name, bytes, percentage]
+    RepositoryItem:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        htmlUrl:
+          type: string
+        importance:
+          type: string
+      required: [name, path, type, htmlUrl, importance]
+    RepositoryAnalysis:
+      type: object
+      properties:
+        owner:
+          type: string
+        name:
+          type: string
+        fullName:
+          type: string
+        description:
+          type: [string, "null"]
+        htmlUrl:
+          type: string
+        stars:
+          type: integer
+        forks:
+          type: integer
+        watchers:
+          type: integer
+        defaultBranch:
+          type: string
+        updatedAt:
+          type: string
+        license:
+          type: [string, "null"]
+        primaryLanguage:
+          type: [string, "null"]
+        languages:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryLanguage"
+        importantItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryItem"
+        overview:
+          type: string
+      required:
+        - owner
+        - name
+        - fullName
+        - description
+        - htmlUrl
+        - stars
+        - forks
+        - watchers
+        - defaultBranch
+        - updatedAt
+        - license
+        - primaryLanguage
+        - languages
+        - importantItems
+        - overview
 
