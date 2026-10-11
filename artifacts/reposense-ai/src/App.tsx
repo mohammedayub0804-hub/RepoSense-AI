@@ -5,18 +5,19 @@ import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import {
-  Activity, AlertCircle, ArrowDownRight, ArrowRight, ArrowUpRight, BookOpen,
+  Activity, AlertCircle, ArrowRight, ArrowUpRight, BookOpen,
   Boxes, Check, Clock3, Code2, ExternalLink, FileCode2, Folder, GitBranch,
-  GitFork, Github, Globe2, Info, Scale, Search, Sparkles, Star, Users,
+  GitFork, Github, Globe2, Info, LoaderCircle, Scale, Search, Send, Sparkles, Star, Users,
 } from 'lucide-react';
 import {
   getAnalyzeRepositoryQueryKey,
   getHealthCheckQueryKey,
   useAnalyzeRepository,
+  useExplainRepository,
   useHealthCheck,
 } from '@workspace/api-client-react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
-import type { RepositoryAnalysis, RepositoryTreeEntry } from '@workspace/api-client-react';
+import type { RepositoryAnalysis, RepositoryChatTurn, RepositoryExplanation, RepositoryTreeEntry } from '@workspace/api-client-react';
 
 const queryClient = new QueryClient();
 type RepoTarget = { owner: string; repo: string };
@@ -156,6 +157,38 @@ function Home() {
 }
 
 function RepositoryResults({ data, languageColors }: { data: RepositoryAnalysis; languageColors: string[] }) {
+  const overviewRequest = useExplainRepository();
+  const chatRequest = useExplainRepository();
+  const [overview, setOverview] = useState<RepositoryExplanation | null>(null);
+  const [chatTurns, setChatTurns] = useState<RepositoryChatTurn[]>([]);
+  const [question, setQuestion] = useState('');
+  const [chatError, setChatError] = useState('');
+
+  function generateOverview() {
+    overviewRequest.mutate({ owner: data.owner, repo: data.name, data: { mode: 'overview' } }, {
+      onSuccess: setOverview,
+    });
+  }
+
+  function submitQuestion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextQuestion = question.trim();
+    if (!nextQuestion || chatRequest.isPending) return;
+    setChatError('');
+    setQuestion('');
+    const history = chatTurns.slice(-6);
+    setChatTurns((turns) => [...turns, { role: 'user', content: nextQuestion }]);
+    chatRequest.mutate({
+      owner: data.owner,
+      repo: data.name,
+      data: { mode: 'question', question: nextQuestion, history },
+    }, {
+      onSuccess: (response) => setChatTurns((turns) => [...turns, { role: 'assistant', content: response.answer }]),
+      onError: (error) => setChatError(getErrorMessage(error)),
+    });
+  }
+
+  const canExplain = data.aiConfigured;
   return (
     <article data-testid="repository-analysis">
       <div className="results-head">
@@ -233,12 +266,66 @@ function RepositoryResults({ data, languageColors }: { data: RepositoryAnalysis;
 
         <ProjectTree entries={data.fileTree} entryCount={data.fileTreeEntryCount} truncated={data.fileTreeTruncated} />
 
-        <aside className="future-panel" aria-label="Future features">
-          <Sparkles className="future-icon" size={17} /><div><div className="future-title">Coming later · not available yet</div><p className="future-copy">AI chat for repository questions and automated code-quality analysis are planned future features. Neither is available in this version.</p></div><ArrowDownRight size={15} className="future-arrow" />
-        </aside>
+        <section className="ai-workbench" aria-labelledby="ai-heading" data-testid="repository-ai-panel">
+          <div className="ai-panel-heading">
+            <div className="ai-heading-mark"><Sparkles size={17} /></div>
+            <div><span className="ai-overline">OPTIONAL · AI-GENERATED</span><h3 id="ai-heading">Explore the repository with context</h3></div>
+            <span className={`ai-config-status ${canExplain ? 'configured' : ''}`}>{canExplain ? 'AI AVAILABLE' : 'AI NOT CONFIGURED'}</span>
+          </div>
+          {canExplain ? <>
+            <p className="ai-disclosure">AI explanations are generated only when you choose an action below. For an overview or answer, retrieved file snippets from this repository are sent to OpenAI. Metadata and estimates above remain separate from AI-generated content.</p>
+            <div className="overview-action">
+              <div><strong>Project overview</strong><span>Generate a grounded summary, technology explanation, and guide to important files.</span></div>
+              <button className="ai-action-btn" type="button" onClick={generateOverview} disabled={overviewRequest.isPending} data-testid="button-generate-ai-overview">
+                {overviewRequest.isPending ? <><LoaderCircle size={14} className="spin" /> Generating…</> : <><Sparkles size={14} /> {overview ? 'Generate again' : 'Generate AI overview'}</>}
+              </button>
+            </div>
+            {overviewRequest.isError && <div className="ai-error" role="alert" data-testid="error-ai-overview">{getErrorMessage(overviewRequest.error)} <button type="button" onClick={generateOverview}>Try again</button></div>}
+            {overview && <div className="ai-result" data-testid="ai-overview-result">
+              <div className="ai-result-label"><Sparkles size={13} /> GENERATED PROJECT EXPLANATION</div>
+              <section><h4>Project summary</h4><p>{overview.summary}</p></section>
+              <section><h4>Technology explained</h4><p>{overview.technologyExplanation}</p></section>
+              <section><h4>Important files</h4>
+                {overview.importantFiles.length ? <ul className="ai-file-list">{overview.importantFiles.map((file, index) => <li key={`${file.path}-${index}`}><code>{file.path}</code><p>{file.explanation}</p></li>)}</ul> : <p>No important-file explanations were returned.</p>}
+              </section>
+              <ReferenceList references={overview.references} owner={data.owner} repo={data.name} branch={data.defaultBranch} />
+            </div>}
+            <div className="chat-panel">
+              <div className="chat-title-row"><div><h4>Ask about this repository</h4><p>Questions are answered using repository context retrieved for this analysis.</p></div><span className="chat-count">{chatTurns.filter((turn) => turn.role === 'user').length} asked</span></div>
+              {chatTurns.length === 0 && !chatRequest.isPending && <div className="chat-empty"><BookOpen size={16} /><span>Ask a specific question about the project structure, files, or technologies.</span></div>}
+              {chatTurns.length > 0 && <div className="chat-transcript" aria-live="polite" data-testid="repository-chat-transcript">
+                {chatTurns.map((turn, index) => <div className={`chat-turn ${turn.role}`} key={`${turn.role}-${index}`}>
+                  <span className="turn-role">{turn.role === 'user' ? 'YOU' : 'REPOSENSE AI'}</span><p>{turn.content}</p>
+                </div>)}
+                {chatRequest.isPending && <div className="chat-waiting"><LoaderCircle size={14} className="spin" /> Reviewing repository context…</div>}
+              </div>}
+              {chatError && <div className="ai-error" role="alert" data-testid="error-ai-chat">{chatError}<button type="button" onClick={() => setChatError('')}>Dismiss</button></div>}
+              {chatRequest.data?.mode === 'question' && chatTurns.length > 0 && <ReferenceList references={chatRequest.data.references} owner={data.owner} repo={data.name} branch={data.defaultBranch} />}
+              <form className="chat-form" onSubmit={submitQuestion}>
+                <label className="sr-only" htmlFor="repository-question">Ask a repository question</label>
+                <textarea id="repository-question" value={question} maxLength={1200} rows={2} placeholder="What is the main application entry point?" onChange={(event) => setQuestion(event.target.value)} data-testid="input-repository-question" />
+                <div className="chat-form-footer"><span>{question.length}/1200 · Retrieved snippets are sent to OpenAI only when you request an answer.</span><button type="submit" disabled={!question.trim() || chatRequest.isPending} data-testid="button-ask-repository">{chatRequest.isPending ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />} Ask</button></div>
+              </form>
+            </div>
+          </> : <div className="ai-unconfigured" role="note" data-testid="ai-not-configured">
+            <Info size={16} /><p>AI explanations use OpenAI’s <code>gpt-5.6-luna</code> model. To enable them, create an OpenAI API key, add it to this Replit project’s Secrets as <code>OPENAI_API_KEY</code>, then restart the API Server. The factual repository analysis above works without AI. Do not enter an API key here.</p>
+          </div>}
+        </section>
       </div>
     </article>
   );
+}
+
+function ReferenceList({ references, owner, repo, branch }: { references: string[]; owner: string; repo: string; branch: string }) {
+  return <div className="reference-list" data-testid="ai-source-references">
+    <span className="reference-label">SOURCE REFERENCES</span>
+    {references.length ? <div>{references.map((reference, index) => {
+      const path = reference.replace(/^\/+/, '');
+      const referenceBranch = branch === 'Unavailable' ? 'HEAD' : branch;
+      const href = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/blob/${encodeURIComponent(referenceBranch)}/${path.split('/').map(encodeURIComponent).join('/')}`;
+      return <a href={href} target="_blank" rel="noreferrer" key={`${reference}-${index}`}><FileCode2 size={12} />{reference}<ExternalLink size={11} /></a>;
+    })}</div> : <p>No source references were returned.</p>}
+  </div>;
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

@@ -85,9 +85,63 @@ export interface RepositoryAnalysis {
   fileTreeEntryCount: number;
   fileTreeTruncated: boolean;
   technologyStack: string[];
+  /** True when the server has an OpenAI API key configured */
+  aiConfigured: boolean;
   /** An estimate based on repository metadata and retrieved documentation */
   likelyPurposeEstimate: string;
   evidenceSources: string[];
   overview: string;
+}
+
+export type RepositoryExplanationInputMode = typeof RepositoryExplanationInputMode[keyof typeof RepositoryExplanationInputMode];
+
+
+export const RepositoryExplanationInputMode = {
+  overview: 'overview',
+  question: 'question',
+} as const;
+
+export type RepositoryChatTurnRole = typeof RepositoryChatTurnRole[keyof typeof RepositoryChatTurnRole];
+
+
+export const RepositoryChatTurnRole = {
+  user: 'user',
+  assistant: 'assistant',
+} as const;
+
+export interface RepositoryChatTurn {
+  role: RepositoryChatTurnRole;
+  /** @maxLength 1200 */
+  content: string;
+}
+
+export interface RepositoryExplanationInput {
+  mode: RepositoryExplanationInputMode;
+  /** @maxLength 1200 */
+  question?: string;
+  /** @maxItems 6 */
+  history?: RepositoryChatTurn[];
+}
+
+export interface RepositoryFileExplanation {
+  path: string;
+  explanation: string;
+}
+
+export type RepositoryExplanationMode = typeof RepositoryExplanationMode[keyof typeof RepositoryExplanationMode];
+
+
+export const RepositoryExplanationMode = {
+  overview: 'overview',
+  question: 'question',
+} as const;
+
+export interface RepositoryExplanation {
+  mode: RepositoryExplanationMode;
+  summary: string;
+  technologyExplanation: string;
+  importantFiles: RepositoryFileExplanation[];
+  answer: string;
+  references: string[];
 }
 

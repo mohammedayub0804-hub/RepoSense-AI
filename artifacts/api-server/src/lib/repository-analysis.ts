@@ -36,6 +36,35 @@ type GitHubError = {
   message?: string;
 };
 
+type RetrievedRepositoryFile = {
+  path: string;
+  text: string;
+  contentSummary: string;
+};
+
+type RepositoryAnalysisData = ReturnType<typeof AnalyzeRepositoryResponse.parse>;
+
+type CachedRepositoryEvidence = {
+  cachedAt: number;
+  analysis: RepositoryAnalysisData;
+  treeNodes: GitHubTreeNode[];
+  files: Map<string, RetrievedRepositoryFile>;
+};
+
+export type RepositoryExplanationEvidence = {
+  analysis: RepositoryAnalysisData;
+  files: RetrievedRepositoryFile[];
+  unavailablePaths: string[];
+};
+
+const evidenceCache = new Map<string, CachedRepositoryEvidence>();
+const evidenceCacheTtlMs = 10 * 60 * 1000;
+const maxCachedRepositories = 30;
+const maxRetrievedFileBytes = 80_000;
+const githubRequestWindowMs = 60 * 60 * 1000;
+const maxGithubRequestsPerWindow = 50;
+const githubRequestTimestamps: number[] = [];
+
 export class GitHubRequestError extends Error {
   constructor(
     message: string,
@@ -46,6 +75,24 @@ export class GitHubRequestError extends Error {
   }
 }
 
+function consumeGithubRequestBudget(): void {
+  const now = Date.now();
+  while (
+    githubRequestTimestamps.length > 0 &&
+    now - githubRequestTimestamps[0] >= githubRequestWindowMs
+  ) {
+    githubRequestTimestamps.shift();
+  }
+  if (githubRequestTimestamps.length >= maxGithubRequestsPerWindow) {
+    throw new GitHubRequestError(
+      "RepoSense has reached its hourly public GitHub API request budget.",
+      429,
+      true,
+    );
+  }
+  githubRequestTimestamps.push(now);
+}
+
 const githubHeaders = {
   Accept: "application/vnd.github+json",
   "User-Agent": "RepoSense-AI",
@@ -53,6 +100,7 @@ const githubHeaders = {
 };
 
 async function githubGet<T>(url: string): Promise<T> {
+  consumeGithubRequestBudget();
   const response = await fetch(url, {
     headers: githubHeaders,
     signal: AbortSignal.timeout(12_000),
@@ -127,6 +175,69 @@ function getPathDepth(path: string): number {
   return path.split("/").filter(Boolean).length;
 }
 
+const sourceExtensions =
+  /\.(?:c|cc|cpp|cs|go|h|hpp|java|js|jsx|kt|mjs|php|py|rb|rs|sh|swift|ts|tsx|vue)$/i;
+const sourceDirectoryNames = new Set([
+  "app",
+  "cmd",
+  "internal",
+  "lib",
+  "packages",
+  "source",
+  "src",
+]);
+const excludedSourceDirectoryNames = new Set([
+  ".git",
+  "build",
+  "coverage",
+  "dist",
+  "examples",
+  "fixtures",
+  "node_modules",
+  "spec",
+  "test",
+  "tests",
+  "vendor",
+]);
+
+function isSourceCandidate(node: GitHubTreeNode): boolean {
+  if (node.type !== "blob" || !node.sha || !sourceExtensions.test(node.path)) {
+    return false;
+  }
+  const segments = node.path.split("/").map((segment) => segment.toLowerCase());
+  return !segments.some((segment) => excludedSourceDirectoryNames.has(segment));
+}
+
+function isLikelyEntryPoint(node: GitHubTreeNode): boolean {
+  const name = basename(node.path).replace(sourceExtensions, "").toLowerCase();
+  return ["index", "main", "app", "server", "application", "router", "cli"].includes(name);
+}
+
+function sourceCandidateRank(node: GitHubTreeNode): number {
+  const basenameWithoutExtension = basename(node.path)
+    .replace(sourceExtensions, "")
+    .toLowerCase();
+  const entryPointOrder = [
+    "index",
+    "main",
+    "app",
+    "server",
+    "application",
+    "router",
+    "cli",
+  ];
+  const rank = entryPointOrder.indexOf(basenameWithoutExtension);
+  const hasSourceDirectory = node.path
+    .split("/")
+    .slice(0, -1)
+    .some((segment) => sourceDirectoryNames.has(segment.toLowerCase()));
+  return (
+    (rank < 0 ? entryPointOrder.length : rank) * 100 +
+    (hasSourceDirectory ? 0 : 30) +
+    Math.min(getPathDepth(node.path), 20)
+  );
+}
+
 function isImportantNode(node: GitHubTreeNode): boolean {
   const name = basename(node.path).toLowerCase();
   if (node.type === "tree") {
@@ -139,7 +250,8 @@ function isImportantNode(node: GitHubTreeNode): boolean {
     /^readme(?:\.|$)/i.test(name) ||
     /^requirements(?:[-.]?.*)?\.txt$/i.test(name) ||
     /^pyproject\.toml$/i.test(name) ||
-    /^build\.gradle(?:\.kts)?$/i.test(name)
+    /^build\.gradle(?:\.kts)?$/i.test(name) ||
+    (isSourceCandidate(node) && isLikelyEntryPoint(node))
   );
 }
 
@@ -158,6 +270,12 @@ function getEstimatedPurpose(path: string, type: "file" | "directory" | "submodu
       return "Likely documentation folder";
     }
     return "Folder; role estimated from its name";
+  }
+
+  if (sourceExtensions.test(name)) {
+    return isLikelyEntryPoint({ path, type: "blob", sha: "" })
+      ? "Likely application entry point; estimated from its name"
+      : "Source-code file; role estimated from its path";
   }
 
   return (
@@ -207,9 +325,20 @@ function selectContentNodes(
     seenManifestNames.add(manifestName);
     uniqueManifests.push(manifest);
   }
+  const sourceFiles = nodes
+    .filter(isSourceCandidate)
+    .sort(
+      (left, right) =>
+        sourceCandidateRank(left) - sourceCandidateRank(right) ||
+        left.path.localeCompare(right.path),
+    );
 
   // Keep the public unauthenticated GitHub API request budget predictable.
-  return [...readmes.slice(0, 1), ...uniqueManifests.slice(0, 2)];
+  return [
+    ...readmes.slice(0, 1),
+    ...uniqueManifests.slice(0, 2),
+    ...sourceFiles.slice(0, 2),
+  ];
 }
 
 function cleanText(value: string): string {
@@ -338,6 +467,10 @@ function summarizeRetrievedFile(path: string, text: string): string {
       : "go.mod was retrieved; its module details could not be summarized automatically.";
   }
 
+  if (sourceExtensions.test(name)) {
+    return "Source file contents were retrieved; automatic source-code summaries are not generated here.";
+  }
+
   return `${basename(path)} was retrieved, but this manifest type has no summary parser yet.`;
 }
 
@@ -417,7 +550,10 @@ function createOverview(
 function contentPathPriority(node: GitHubTreeNode): number {
   const name = basename(node.path).toLowerCase();
   const index = contentCandidates.findIndex((pattern) => pattern.test(name));
-  return index < 0 ? contentCandidates.length : index;
+  if (index >= 0) return index;
+  return isLikelyEntryPoint(node)
+    ? contentCandidates.length + sourceCandidateRank(node)
+    : contentCandidates.length + 100;
 }
 
 export async function analyzeGitHubRepository(owner: string, repo: string) {
@@ -558,7 +694,12 @@ export async function analyzeGitHubRepository(owner: string, repo: string) {
     return left.entry.path.localeCompare(right.entry.path);
   });
   const fileTree = highValueTreeEntries.slice(0, 90).map(({ entry }) => entry);
-  const technologyStack = detectTechnologyStack(languages, successfullyRetrievedFiles);
+  const retrievedManifests = successfullyRetrievedFiles.filter((file) =>
+    contentCandidates
+      .slice(1)
+      .some((pattern) => pattern.test(basename(file.path))),
+  );
+  const technologyStack = detectTechnologyStack(languages, retrievedManifests);
   const evidenceSources = [
     "GitHub repository metadata",
     "GitHub language statistics",
@@ -567,7 +708,7 @@ export async function analyzeGitHubRepository(owner: string, repo: string) {
   ];
   const fileTreeEntryCount = treeNodes.length;
 
-  return AnalyzeRepositoryResponse.parse({
+  const analysis = AnalyzeRepositoryResponse.parse({
     owner: repository.owner.login,
     name: repository.name,
     fullName: repository.full_name,
@@ -587,6 +728,7 @@ export async function analyzeGitHubRepository(owner: string, repo: string) {
     fileTreeTruncated:
       treeResponse.truncated || fileTreeEntryCount > fileTree.length,
     technologyStack,
+    aiConfigured: Boolean(process.env.OPENAI_API_KEY?.trim()),
     likelyPurposeEstimate: purposeEstimate(repository, successfullyRetrievedFiles),
     evidenceSources,
     overview: createOverview(
@@ -596,4 +738,219 @@ export async function analyzeGitHubRepository(owner: string, repo: string) {
       fileTreeEntryCount,
     ),
   });
+
+  const cacheKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  evidenceCache.delete(cacheKey);
+  evidenceCache.set(cacheKey, {
+    cachedAt: Date.now(),
+    analysis,
+    treeNodes,
+    files: new Map(
+      successfullyRetrievedFiles.map((file) => [file.path, file]),
+    ),
+  });
+  while (evidenceCache.size > maxCachedRepositories) {
+    const oldestKey = evidenceCache.keys().next().value;
+    if (!oldestKey) break;
+    evidenceCache.delete(oldestKey);
+  }
+
+  return analysis;
+}
+
+const nonInformativeQuestionTerms = new Set([
+  "about",
+  "does",
+  "explain",
+  "file",
+  "files",
+  "from",
+  "have",
+  "help",
+  "into",
+  "make",
+  "more",
+  "project",
+  "repository",
+  "show",
+  "tell",
+  "that",
+  "this",
+  "what",
+  "where",
+  "which",
+  "with",
+]);
+
+function isTextFilePath(path: string): boolean {
+  const name = basename(path).toLowerCase();
+  return (
+    sourceExtensions.test(name) ||
+    /^readme(?:\.|$)/i.test(name) ||
+    /^requirements(?:[-.]?.*)?\.txt$/i.test(name) ||
+    /\.(?:json|md|mdx|rst|toml|ya?ml|xml|ini|conf|sql|txt)$/i.test(name) ||
+    /^(?:dockerfile|makefile|license|gemfile)$/i.test(name)
+  );
+}
+
+function getQuestionTerms(question: string): string[] {
+  return [
+    ...new Set(
+      question
+        .toLowerCase()
+        .split(/[^a-z0-9_.-]+/)
+        .filter(
+          (term) =>
+            term.length >= 4 && !nonInformativeQuestionTerms.has(term),
+        ),
+    ),
+  ];
+}
+
+function findQuestionFileNodes(
+  treeNodes: GitHubTreeNode[],
+  question: string,
+): { nodes: GitHubTreeNode[]; unavailablePaths: string[] } {
+  const explicitPaths =
+    question.match(
+      /(?:[A-Za-z0-9_.@+-]+\/)*[A-Za-z0-9_.@+-]+\.(?:[A-Za-z0-9]{1,8})/g,
+    ) ?? [];
+  const candidates = treeNodes.filter(
+    (node) => node.type === "blob" && node.sha && isTextFilePath(node.path),
+  );
+  const matched = new Map<string, GitHubTreeNode>();
+  const unavailablePaths: string[] = [];
+
+  for (const explicitPath of explicitPaths) {
+    const normalizedPath = explicitPath.replace(/^\/+|\/+$/g, "").toLowerCase();
+    const matchingNodes = candidates
+      .filter(
+        (node) =>
+          node.path.toLowerCase() === normalizedPath ||
+          (!normalizedPath.includes("/") &&
+            basename(node.path).toLowerCase() === normalizedPath),
+      )
+      .sort(
+        (left, right) =>
+          getPathDepth(left.path) - getPathDepth(right.path) ||
+          left.path.localeCompare(right.path),
+      );
+    if (matchingNodes.length > 0) {
+      matched.set(matchingNodes[0].path, matchingNodes[0]);
+    } else {
+      unavailablePaths.push(explicitPath);
+    }
+  }
+
+  if (explicitPaths.length === 0) {
+    const terms = getQuestionTerms(question);
+    const scored = candidates
+      .map((node) => ({
+        node,
+        score: terms.reduce(
+          (score, term) =>
+            score + (node.path.toLowerCase().includes(term) ? 1 : 0),
+          0,
+        ),
+      }))
+      .filter(({ score }) => score > 0)
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          getPathDepth(left.node.path) - getPathDepth(right.node.path) ||
+          left.node.path.localeCompare(right.node.path),
+      );
+    for (const { node } of scored.slice(0, 2)) matched.set(node.path, node);
+  }
+
+  const matchingNodes = [...matched.values()];
+  unavailablePaths.push(...matchingNodes.slice(2).map((node) => node.path));
+  return {
+    nodes: matchingNodes.slice(0, 2),
+    unavailablePaths: [...new Set(unavailablePaths)],
+  };
+}
+
+function getCachedEvidence(
+  owner: string,
+  repo: string,
+): CachedRepositoryEvidence | undefined {
+  const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  const cached = evidenceCache.get(key);
+  if (!cached) return undefined;
+  if (Date.now() - cached.cachedAt > evidenceCacheTtlMs) {
+    evidenceCache.delete(key);
+    return undefined;
+  }
+  evidenceCache.delete(key);
+  evidenceCache.set(key, cached);
+  return cached;
+}
+
+export async function getRepositoryExplanationEvidence(
+  owner: string,
+  repo: string,
+  mode: "overview" | "question",
+  question?: string,
+): Promise<RepositoryExplanationEvidence> {
+  let cached = getCachedEvidence(owner, repo);
+  if (!cached) {
+    await analyzeGitHubRepository(owner, repo);
+    cached = getCachedEvidence(owner, repo);
+  }
+  if (!cached) throw new Error("Repository evidence could not be prepared.");
+
+  const unavailablePaths: string[] = [];
+  if (mode === "question" && question?.trim()) {
+    const requested = findQuestionFileNodes(cached.treeNodes, question);
+    unavailablePaths.push(...requested.unavailablePaths);
+    let newFileFetches = 0;
+    for (const node of requested.nodes) {
+      if (cached.files.has(node.path)) continue;
+      if (
+        newFileFetches >= 2 ||
+        cached.files.size >= 12 ||
+        !node.sha ||
+        (typeof node.size === "number" && node.size > maxRetrievedFileBytes)
+      ) {
+        unavailablePaths.push(node.path);
+        continue;
+      }
+      newFileFetches += 1;
+      try {
+        const blob = await githubGet<GitHubBlob>(
+          `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs/${node.sha}`,
+        );
+        if (blob.encoding !== "base64" || typeof blob.content !== "string") {
+          unavailablePaths.push(node.path);
+          continue;
+        }
+        const text = Buffer.from(
+          blob.content.replace(/\s/g, ""),
+          "base64",
+        ).toString("utf8");
+        cached.files.set(node.path, {
+          path: node.path,
+          text,
+          contentSummary: summarizeRetrievedFile(node.path, text),
+        });
+      } catch (error) {
+        if (
+          error instanceof GitHubRequestError &&
+          (error.status === 404 || error.status === 409)
+        ) {
+          unavailablePaths.push(node.path);
+          continue;
+        }
+        throw error;
+      }
+    }
+    cached.cachedAt = Date.now();
+  }
+
+  return {
+    analysis: cached.analysis,
+    files: [...cached.files.values()],
+    unavailablePaths: [...new Set(unavailablePaths)],
+  };
 }

@@ -66,9 +66,52 @@ export const AnalyzeRepositoryResponse = zod.object({
   "fileTreeEntryCount": zod.number().int(),
   "fileTreeTruncated": zod.boolean(),
   "technologyStack": zod.array(zod.string()),
+  "aiConfigured": zod.boolean().describe('True when the server has an OpenAI API key configured'),
   "likelyPurposeEstimate": zod.string().describe('An estimate based on repository metadata and retrieved documentation'),
   "evidenceSources": zod.array(zod.string()),
   "overview": zod.string()
+})
+
+
+/**
+ * @summary Generate a grounded repository explanation or answer a repository question
+ */
+
+
+
+
+export const ExplainRepositoryParams = zod.object({
+  "owner": zod.coerce.string().min(1),
+  "repo": zod.coerce.string().min(1)
+})
+
+export const explainRepositoryBodyQuestionMax = 1200;
+
+export const explainRepositoryBodyHistoryItemContentMax = 1200;
+
+export const explainRepositoryBodyHistoryMax = 6;
+
+
+
+export const ExplainRepositoryBody = zod.object({
+  "mode": zod.enum(['overview', 'question']),
+  "question": zod.string().max(explainRepositoryBodyQuestionMax).optional(),
+  "history": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().max(explainRepositoryBodyHistoryItemContentMax)
+})).max(explainRepositoryBodyHistoryMax).optional()
+})
+
+export const ExplainRepositoryResponse = zod.object({
+  "mode": zod.enum(['overview', 'question']),
+  "summary": zod.string(),
+  "technologyExplanation": zod.string(),
+  "importantFiles": zod.array(zod.object({
+  "path": zod.string(),
+  "explanation": zod.string()
+})),
+  "answer": zod.string(),
+  "references": zod.array(zod.string())
 })
 
 

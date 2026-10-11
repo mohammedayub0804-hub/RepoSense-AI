@@ -31,6 +31,8 @@ export interface RepositoryAnalysis {
   fileTreeEntryCount: number;
   fileTreeTruncated: boolean;
   technologyStack: string[];
+  /** True when the server has an OpenAI API key configured */
+  aiConfigured: boolean;
   /** An estimate based on repository metadata and retrieved documentation */
   likelyPurposeEstimate: string;
   evidenceSources: string[];

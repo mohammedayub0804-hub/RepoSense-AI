@@ -75,6 +75,67 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /repositories/{owner}/{repo}/explanation:
+    post:
+      operationId: explainRepository
+      tags: [repositories]
+      summary: Generate a grounded repository explanation or answer a repository question
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryExplanationInput"
+      responses:
+        "200":
+          description: Explanation grounded in content retrieved from GitHub
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryExplanation"
+        "400":
+          description: Invalid explanation request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Repository not found or not public
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: GitHub or AI provider request limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: GitHub or AI provider could not be reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: OpenAI is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     HealthStatus:
@@ -187,6 +248,9 @@ components:
           type: array
           items:
             type: string
+        aiConfigured:
+          type: boolean
+          description: True when the server has an OpenAI API key configured
         likelyPurposeEstimate:
           type: string
           description: An estimate based on repository metadata and retrieved documentation
@@ -215,7 +279,68 @@ components:
         - fileTreeEntryCount
         - fileTreeTruncated
         - technologyStack
+        - aiConfigured
         - likelyPurposeEstimate
         - evidenceSources
         - overview
+    RepositoryExplanationInput:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [overview, question]
+        question:
+          type: string
+          maxLength: 1200
+        history:
+          type: array
+          maxItems: 6
+          items:
+            $ref: "#/components/schemas/RepositoryChatTurn"
+      required: [mode]
+    RepositoryChatTurn:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          maxLength: 1200
+      required: [role, content]
+    RepositoryFileExplanation:
+      type: object
+      properties:
+        path:
+          type: string
+        explanation:
+          type: string
+      required: [path, explanation]
+    RepositoryExplanation:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [overview, question]
+        summary:
+          type: string
+        technologyExplanation:
+          type: string
+        importantFiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryFileExplanation"
+        answer:
+          type: string
+        references:
+          type: array
+          items:
+            type: string
+      required:
+        - mode
+        - summary
+        - technologyExplanation
+        - importantFiles
+        - answer
+        - references
 
